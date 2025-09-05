@@ -1355,9 +1355,9 @@ def api_record_attendance(request):
 
         if not created and attendance.present:
             # The student was already marked as present. Check payment status to inform the frontend.
-            payment_status = "الحصة مدفوعة بالفعل"
+            payment_status = "" # Default to no message
             if not attendance.student_paid_for_session:
-                payment_status = "الحصة لم تدفع بعد"
+                payment_status = "الحصة لم تدفع بعد" # Only show message if not paid
 
             return JsonResponse({
                 'status': 'already_registered',
