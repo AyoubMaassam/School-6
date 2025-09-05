@@ -2279,7 +2279,7 @@ def api_record_attendance_by_student(request):
 
         if not created and attendance.present:
             # The student was already marked as present. Check payment status to inform the frontend.
-            payment_status_message = "الحصة مدفوعة بالفعل"
+            payment_status_message = "" # Default to no message
             if not attendance.student_paid_for_session:
                 # This is the key change: inform the user that the session is still unpaid.
                 payment_status_message = "الحصة لم تدفع بعد"
