@@ -1355,9 +1355,9 @@ def api_record_attendance(request):
 
         if not created and attendance.present:
             # The student was already marked as present. Check payment status to inform the frontend.
-            payment_status = "" # Default to no message
+            payment_status = "الحصة مدفوعة بالفعل"
             if not attendance.student_paid_for_session:
-                payment_status = "الحصة لم تدفع بعد" # Only show message if not paid
+                payment_status = "الحصة لم تدفع بعد"
 
             return JsonResponse({
                 'status': 'already_registered',
@@ -1368,29 +1368,53 @@ def api_record_attendance(request):
             }, status=200)
 
         attendance.present = True
+        payment_status_message = "" # Reset status message
 
-        # --- Payment Logic ---
-        payment_status_message = "الحصة غير مدفوعة" # Default message
-        group = session.group
-        price_per_session = Decimal('0.00')
+        # --- Free Session & Discount Logic ---
+        try:
+            student_group = StudentGroup.objects.get(student=student, group=session.group)
 
-        if group.price_per_4_sessions and group.price_per_4_sessions > 0:
-            price_per_session = group.price_per_4_sessions / Decimal('4.0')
+            # Check if the session should be free
+            if student_group.is_completely_free:
+                attendance.is_free_session = True
+                payment_status_message = "حصة مجانية (طالب معفى)"
+            elif student_group.free_sessions_remaining > 0:
+                attendance.is_free_session = True
+                student_group.free_sessions_remaining -= 1
+                student_group.save(update_fields=['free_sessions_remaining'])
+                payment_status_message = f"تم استخدام حصة مجانية. متبقي: {student_group.free_sessions_remaining}"
 
-        if price_per_session > 0:
-            if not attendance.student_paid_for_session and student.prepaid_balance >= price_per_session:
-                student.prepaid_balance -= price_per_session
-                attendance.student_paid_for_session = True
-                student.save(update_fields=['prepaid_balance'])
-                payment_status_message = "" # Set to empty to suppress notification, as per user request
+        except StudentGroup.DoesNotExist:
+            student_group = None # No special settings apply
+
+        # --- Monetary Payment Logic (only if not a free session) ---
+        if not attendance.is_free_session:
+            payment_status_message = "الحصة غير مدفوعة" # Default for non-free sessions
+            group = session.group
+            price_per_session = Decimal('0.00')
+
+            if group.price_per_4_sessions and group.price_per_4_sessions > 0:
+                price_per_session = group.price_per_4_sessions / Decimal('4.0')
+
+            # Apply discount if applicable
+            if student_group and student_group.discount_percentage > 0:
+                discount_multiplier = Decimal('1') - (student_group.discount_percentage / Decimal('100'))
+                price_per_session *= discount_multiplier
+
+            if price_per_session > 0:
+                if not attendance.student_paid_for_session and student.prepaid_balance >= price_per_session:
+                    student.prepaid_balance -= price_per_session
+                    attendance.student_paid_for_session = True
+                    student.save(update_fields=['prepaid_balance'])
+                    payment_status_message = "" # Paid successfully, no message needed
+                elif attendance.student_paid_for_session:
+                    payment_status_message = "الحصة مدفوعة بالفعل"
+                else: # Not enough balance
+                    payment_status_message = f"رصيد غير كافٍ. الرصيد الحالي: {student.prepaid_balance.quantize(Decimal('0.01'))} دج"
             elif attendance.student_paid_for_session:
                 payment_status_message = "الحصة مدفوعة بالفعل"
-            else: # Not enough balance
-                payment_status_message = f"رصيد غير كافٍ. الرصيد الحالي: {student.prepaid_balance.quantize(Decimal('0.01'))} دج"
-        elif attendance.student_paid_for_session:
-             payment_status_message = "الحصة مدفوعة بالفعل"
-        else: # Price is zero
-             payment_status_message = "الحصة مجانية (السعر 0)"
+            else: # Price is zero or negative after discount
+                payment_status_message = "الحصة مجانية (السعر 0)"
 
         attendance.save()
 
@@ -2279,7 +2303,7 @@ def api_record_attendance_by_student(request):
 
         if not created and attendance.present:
             # The student was already marked as present. Check payment status to inform the frontend.
-            payment_status_message = "" # Default to no message
+            payment_status_message = "الحصة مدفوعة بالفعل"
             if not attendance.student_paid_for_session:
                 # This is the key change: inform the user that the session is still unpaid.
                 payment_status_message = "الحصة لم تدفع بعد"
@@ -2295,30 +2319,54 @@ def api_record_attendance_by_student(request):
         # If the record was newly created OR if it existed but the student was marked absent,
         # we now mark them as present.
         attendance.present = True
+        payment_status_message = "" # Reset status message
 
-        # --- Payment Logic ---
-        payment_status_message = "الحصة غير مدفوعة" # Default message
-        group = target_session.group
-        price_per_session = Decimal('0.00')
+        # --- Free Session & Discount Logic ---
+        try:
+            student_group = StudentGroup.objects.get(student=student, group=target_session.group)
 
-        if group.price_per_4_sessions and group.price_per_4_sessions > 0:
-            price_per_session = group.price_per_4_sessions / Decimal('4.0')
+            # Check if the session should be free
+            if student_group.is_completely_free:
+                attendance.is_free_session = True
+                payment_status_message = "حصة مجانية (طالب معفى)"
+            elif student_group.free_sessions_remaining > 0:
+                attendance.is_free_session = True
+                student_group.free_sessions_remaining -= 1
+                student_group.save(update_fields=['free_sessions_remaining'])
+                payment_status_message = f"تم استخدام حصة مجانية. متبقي: {student_group.free_sessions_remaining}"
 
-        if price_per_session > 0:
-            # Check if student has enough balance and session is not already paid
-            if not attendance.student_paid_for_session and student.prepaid_balance >= price_per_session:
-                student.prepaid_balance -= price_per_session
-                attendance.student_paid_for_session = True
-                student.save(update_fields=['prepaid_balance'])
-                payment_status_message = "" # Set to empty to suppress notification, as per user request
+        except StudentGroup.DoesNotExist:
+            student_group = None # No special settings apply
+
+        # --- Monetary Payment Logic (only if not a free session) ---
+        if not attendance.is_free_session:
+            payment_status_message = "الحصة غير مدفوعة" # Default for non-free sessions
+            group = target_session.group
+            price_per_session = Decimal('0.00')
+
+            if group.price_per_4_sessions and group.price_per_4_sessions > 0:
+                price_per_session = group.price_per_4_sessions / Decimal('4.0')
+
+            # Apply discount if applicable
+            if student_group and student_group.discount_percentage > 0:
+                discount_multiplier = Decimal('1') - (student_group.discount_percentage / Decimal('100'))
+                price_per_session *= discount_multiplier
+
+            if price_per_session > 0:
+                # Check if student has enough balance and session is not already paid
+                if not attendance.student_paid_for_session and student.prepaid_balance >= price_per_session:
+                    student.prepaid_balance -= price_per_session
+                    attendance.student_paid_for_session = True
+                    student.save(update_fields=['prepaid_balance'])
+                    payment_status_message = "" # Paid successfully, no message needed
+                elif attendance.student_paid_for_session:
+                    payment_status_message = "الحصة مدفوعة بالفعل"
+                else: # Not enough balance
+                    payment_status_message = f"رصيد غير كافٍ. الرصيد الحالي: {student.prepaid_balance.quantize(Decimal('0.01'))} دج"
             elif attendance.student_paid_for_session:
-                payment_status_message = "الحصة مدفوعة بالفعل"
-            else: # Not enough balance
-                payment_status_message = f"رصيد غير كافٍ. الرصيد الحالي: {student.prepaid_balance.quantize(Decimal('0.01'))} دج"
-        elif attendance.student_paid_for_session:
-             payment_status_message = "الحصة مدفوعة بالفعل"
-        else: # Price is zero
-             payment_status_message = "الحصة مجانية (السعر 0)"
+                 payment_status_message = "الحصة مدفوعة بالفعل"
+            else: # Price is zero or negative after discount
+                 payment_status_message = "الحصة مجانية (السعر 0)"
 
 
         attendance.save()
@@ -2465,42 +2513,45 @@ def student_monthly_payment_view(request, student_id):
                         'can_be_excused': can_be_excused
                     })
 
-            # Calculate amount due based on unpaid, non-excused sessions
-            # This is a simplified calculation. True accounting might be more complex.
-            # For now, count unpaid sessions that are not excused absences.
+            # New logic to calculate amount due, considering discounts and free sessions
+            student_group_settings = student_group # For clarity in this block
 
-            # Recalculate unpaid_sessions_count for amount_due accurately
-            # This should count sessions that require payment.
-            billable_unpaid_count = 0
-            # Also calculate attended_but_not_paid_sessions_count in the same loop
-
-            # Base query for chronological sessions
-            all_sessions_for_group_chronological = Session.objects.filter(
-                group=selected_group
-            ).order_by('date', 'start_time')
-
+            # Efficiently calculate billable sessions and other stats
+            all_past_sessions_qs = Session.objects.filter(group=selected_group, date__lte=timezone.now().date())
             if enrollment_date:
-                all_sessions_for_group_chronological = all_sessions_for_group_chronological.filter(date__gte=enrollment_date)
+                all_past_sessions_qs = all_past_sessions_qs.filter(date__gte=enrollment_date)
 
-            current_date = timezone.now().date()
+            all_past_sessions_ids = set(all_past_sessions_qs.values_list('id', flat=True))
 
-            for session_obj in all_sessions_for_group_chronological:
-                att = Attendance.objects.filter(student=student, session=session_obj).first()
-                is_past_or_current_session = session_obj.date <= current_date
+            # Get all relevant attendance records in one query
+            relevant_attendances = Attendance.objects.filter(
+                student=student,
+                session_id__in=all_past_sessions_ids
+            )
 
-                if att:
-                    if not att.student_paid_for_session and not att.excused_absence:
-                        if is_past_or_current_session: # Only count past/current sessions as billable
-                            billable_unpaid_count += 1
-                        # For attended_but_not_paid, session date doesn't strictly matter as long as attendance exists
-                        if att.present:
-                             attended_but_not_paid_sessions_count += 1
-                else: # No attendance record
-                    if is_past_or_current_session: # Billable if past/current and no record
-                         billable_unpaid_count +=1
-                         # Not attended if no record, so doesn't contribute to attended_but_not_paid_sessions_count
+            # Set of sessions that are not billable
+            non_billable_session_ids = set(relevant_attendances.filter(
+                Q(student_paid_for_session=True) | Q(excused_absence=True) | Q(is_free_session=True)
+            ).values_list('session_id', flat=True))
+
+            billable_session_ids = all_past_sessions_ids - non_billable_session_ids
+            billable_unpaid_count = len(billable_session_ids)
+
+            # Recalculate attended_but_not_paid_sessions_count
+            attended_but_not_paid_sessions_count = relevant_attendances.filter(
+                present=True, student_paid_for_session=False, is_free_session=False, excused_absence=False
+            ).count()
 
             gross_amount_due = billable_unpaid_count * price_per_session
+
+            # Apply discount if applicable
+            if student_group_settings and not student_group_settings.is_completely_free and student_group_settings.discount_percentage > 0:
+                discount_multiplier = Decimal('1') - (student_group_settings.discount_percentage / Decimal('100'))
+                gross_amount_due *= discount_multiplier
+
+            # If student is completely free for this group, amount due is always zero.
+            if student_group_settings and student_group_settings.is_completely_free:
+                gross_amount_due = Decimal('0.00')
             net_amount_due = gross_amount_due - student_prepaid_balance # Use the explicit variable
             if net_amount_due < Decimal('0.00'):
                 net_amount_due = Decimal('0.00')
@@ -2539,7 +2590,43 @@ def student_monthly_payment_view(request, student_id):
 
         # Now use current_group_details_post and current_price_per_session_post for POST actions
 
-        if action == 'mark_excused':
+        if action == 'update_student_group_settings':
+            discount_str = request.POST.get('discount_percentage', '0').strip()
+            free_sessions_to_add_str = request.POST.get('free_sessions_to_add', '0').strip()
+            is_completely_free_val = request.POST.get('is_completely_free') == 'on'
+
+            try:
+                student_group_to_update = StudentGroup.objects.get(student_id=student_id, group_id=group_id_post)
+
+                # Validate and update discount
+                discount_percentage = Decimal(discount_str)
+                if not (0 <= discount_percentage <= 100):
+                    messages.error(request, "نسبة التخفيض يجب أن تكون بين 0 و 100.")
+                    raise ValueError("Invalid discount")
+
+                # Validate and update free sessions
+                free_sessions_to_add = int(free_sessions_to_add_str)
+                if free_sessions_to_add < 0:
+                    messages.error(request, "عدد الحصص المجانية المضافة لا يمكن أن يكون سالباً.")
+                    raise ValueError("Invalid free sessions")
+
+                # Update fields
+                student_group_to_update.discount_percentage = discount_percentage
+                student_group_to_update.free_sessions_remaining += free_sessions_to_add
+                student_group_to_update.is_completely_free = is_completely_free_val
+
+                student_group_to_update.save()
+                messages.success(request, "تم تحديث إعدادات الدفع للطالب في هذا الفوج بنجاح.")
+
+            except StudentGroup.DoesNotExist:
+                messages.error(request, "لم يتم العثور على تسجيل الطالب في هذا الفوج.")
+            except (ValueError, TypeError):
+                if not messages.get_messages(request):
+                    messages.error(request, "الرجاء إدخال قيم صالحة للتخفيض والحصص المجانية.")
+
+            return redirect(reverse('student_monthly_payment', args=[student_id]) + f'?group_id={group_id_post}')
+
+        elif action == 'mark_excused':
             session_id_to_excuse = request.POST.get('session_id')
             if session_id_to_excuse:
                 try:
@@ -2899,9 +2986,10 @@ def teacher_monthly_payment_view(request, teacher_id):
                 session__group=current_group_post
             )
 
-            # Count students present + students with unexcused absences
+            # Count students present + students with unexcused absences, excluding free sessions
             total_payable_instances = attendance_records.filter(
-                Q(present=True) | Q(excused_absence=False)
+                Q(present=True) | Q(excused_absence=False),
+                is_free_session=False
             ).count()
 
             total_presences = attendance_records.filter(present=True).count()

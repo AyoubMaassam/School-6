@@ -57,11 +57,68 @@
 
             {% if selected_group %}
                 <hr>
-                <h4>تفاصيل الفوج المبدئية (جاري الاستعادة): {{ selected_group.name }}</h4>
-                <p><strong>المادة:</strong> {{ selected_group.subject.name }}</p>
-                <p><strong>المدرس:</strong> {{ selected_group.teacher.first_name }} {{ selected_group.teacher.last_name }}</p>
-                <p><strong>سعر الـ 4 حصص:</strong> {{ selected_group.price_per_4_sessions|floatformat:2 }} دج (يعني {{ price_per_session|floatformat:2 }} دج للحصة الواحدة)</p>
-                <p><em>(سيتم استعادة باقي تفاصيل الدفع والحصص في الخطوات التالية)</em></p>
+                <h4>تفاصيل الدفع للفوج: {{ selected_group.name }}</h4>
+                <div class="row">
+                    <!-- Payment Summary Column -->
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100">
+                            <div class="card-header bg-info text-white">ملخص الدفع</div>
+                            <div class="card-body">
+                                <p><strong>سعر الحصة الأساسي:</strong> {{ price_per_session|floatformat:2 }} دج</p>
+                                {% if student_group_settings.is_completely_free %}
+                                    <div class="alert alert-success">الطالب معفى من الدفع بالكامل لهذا الفوج.</div>
+                                {% else %}
+                                    <p><strong>إجمالي الحصص المستحقة للدفع:</strong> {{ (gross_amount_due / price_per_session) | floatformat:0 if price_per_session > 0 else 0 }} حصص</p>
+                                    <p><strong>المبلغ قبل الخصم:</strong> {{ gross_amount_due|floatformat:2 }} دج</p>
+                                    {% if student_group_settings.discount_percentage > 0 %}
+                                    <p class="text-success"><strong>خصم ({{ student_group_settings.discount_percentage }}%):</strong> <span class="float-right">- {{ (gross_amount_due * student_group_settings.discount_percentage / 100)|floatformat:2 }} دج</span></p>
+                                    <hr>
+                                    <h5 class="font-weight-bold">المبلغ المستحق بعد الخصم: <span class="float-right">{{ (gross_amount_due * (100 - student_group_settings.discount_percentage) / 100)|floatformat:2 }} دج</span></h5>
+                                    {% endif %}
+                                    <p class="text-primary"><strong>الرصيد المدفوع مقدماً:</strong> <span class="float-right">- {{ student_prepaid_balance|floatformat:2 }} دج</span></p>
+                                    <hr>
+                                    <h4 class="text-danger font-weight-bold">صافي المبلغ المطلوب دفعه: <span class="float-right">{{ net_amount_due|floatformat:2 }} دج</span></h4>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Settings Column -->
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100">
+                            <div class="card-header bg-secondary text-white">إعدادات الدفع الخاصة بالطالب في هذا الفوج</div>
+                            <div class="card-body">
+                                <form method="POST" action="{% url 'student_monthly_payment' student.id %}">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="update_student_group_settings">
+                                    <input type="hidden" name="group_id" value="{{ selected_group.id }}">
+
+                                    <div class="form-group">
+                                        <label for="discount_percentage">نسبة التخفيض (%):</label>
+                                        <input type="number" class="form-control" id="discount_percentage" name="discount_percentage" step="0.01" min="0" max="100" value="{{ student_group_settings.discount_percentage|default:0 }}" {% if student_group_settings.is_completely_free %}disabled{% endif %}>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="free_sessions_remaining">حصص مجانية متبقية:</label>
+                                        <input type="text" readonly class="form-control-plaintext" id="free_sessions_remaining" value="{{ student_group_settings.free_sessions_remaining|default:0 }}">
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="free_sessions_to_add">إضافة حصص مجانية:</label>
+                                        <input type="number" class="form-control" id="free_sessions_to_add" name="free_sessions_to_add" min="0" value="0" {% if student_group_settings.is_completely_free %}disabled{% endif %}>
+                                    </div>
+
+                                    <div class="form-group form-check">
+                                        <input type="checkbox" class="form-check-input" id="is_completely_free" name="is_completely_free" {% if student_group_settings.is_completely_free %}checked{% endif %}>
+                                        <label class="form-check-label" for="is_completely_free">الطالب معفى من الدفع بالكامل لهذا الفوج</label>
+                                    </div>
+
+                                    <button type="submit" class="btn btn-success">حفظ الإعدادات</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Session History and Payment Form will go here in a later step -->
             {% else %}
                 {% if request.GET.group_id %}
                     <p class="text-danger">الفوج المحدد غير موجود أو الطالب غير مسجل فيه.</p>
